@@ -1,50 +1,72 @@
 from typing import Tuple
 import torch
+import torch.nn as nn
 from dekorde.components.mha import MultiHeadAttentionLayer
 from dekorde.components.ffn import FeedForward
 
 
-class DecoderLayer(torch.nn.Module):
-    def __init__(self, hidden_size: int, max_length: int, heads: int, lookahead_mask: torch.Tensor):
+class DecoderLayer(nn.Module):
+    def __init__(self, max_length, embed_size: int, hidden_size: int, heads: int, dropout_prob: float = 0.1):
         super().__init__()
-        # masked, multi-head self-attention layer.
-        self.masked_mhsa_layer = MultiHeadAttentionLayer(hidden_size, max_length, heads, lookahead_mask)
-        self.norm_1 = torch.nn.LayerNorm(hidden_size)
-        # not masked, multi-head encoder-decoder attention layer.
-        self.mheda_layer = MultiHeadAttentionLayer(hidden_size, max_length, heads)
-        self.norm_2 = torch.nn.LayerNorm(hidden_size)
-        # position-wise feedfowrard network.
-        self.ffn = FeedForward(hidden_size)
-        self.norm_3 = torch.nn.LayerNorm(hidden_size)
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.heads = heads
 
-    def forward(self, H_pair: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.masked_multi_head_self_attention_layer = MultiHeadAttentionLayer(embed_size, heads, masked=True)
+        self.norm_1 = nn.LayerNorm((max_length, embed_size))
+        self.multi_head_encoder_decoder_attention_layer = MultiHeadAttentionLayer(embed_size, heads)
+        self.norm_2 = nn.LayerNorm((max_length, embed_size))
+        self.ffn = nn.Sequential([
+            nn.Linear(embed_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, embed_size)
+        ])
+        self.norm_3 = nn.LayerNorm((max_length, embed_size))
+        self.dropout = nn.Dropout(dropout_prob)
+
+    def forward(self, Y_ep: torch.Tensor, H_all_x: torch.Tensor, Mask: torch.Tensor) -> torch.Tensor:
         """
-        :param H_pair: (H_x = (N, L, H), H_y = (N, L, H))
-        :return: H_x (as-is), H_y (updated)
+        :param Y_ep: (N, L, E)
+        :param H_all_x: (N, L, E)
+        :param Mask: (N, L)
+        :return: H_all_t: (N, L, H)
         """
-        H_x, H_y = H_pair
-        Out_ = self.masked_mhsa_layer.forward(H_q=H_y, H_k=H_y, H_v=H_y) + H_y  # skip connection
-        Out_ = self.norm_1(Out_)
-        Out_ = self.mheda_layer.forward(H_q=Out_, H_k=H_x, H_v=H_x) + Out_  # skip connection
-        Out_ = self.norm_2(Out_)
-        Out_ = self.ffn(Out_)
-        Out = self.norm_3(Out_)  # H_y updated
-        return H_x, Out
+        out_1 = self.masked_multi_head_self_attention_layer(Y_ep, H_all_x, H_all_x, Mask) # (N, L, E)
+        out_1 = self.dropout(out_1)
+        out_1 = self.norm_1(Y_ep + out_1) # (N, L, E)
+        
+        out_2 = self.multi_head_encoder_decoder_attention_layer(out_1, out_1, out_1) # (N, L, E)
+        out_2 = self.dropout(out_2)
+        out_2 = self.norm_2(out_1 + out_2)
+        
+        out_3 = self.ffn(out_2)
+        out_3 = self.dropout(out_3)
+        out = self.norm_3(out_2 + out_3) # (N, L, E)
+        
+        return out
 
 
-class Decoder(torch.nn.Module):
+class Decoder(nn.Module):
 
-    def __init__(self, hidden_size: int, max_length: int, heads: int, depth: int, lookahead_mask: torch.Tensor):
+    def __init__(self, max_length: int, vocab_size: int, embed_size: int, hidden_size: int, heads: int, depth: int, dropout_prob: float = 0.1):
         super().__init__()
-        self.layers = torch.nn.Sequential(
-            *[DecoderLayer(hidden_size, max_length, heads, lookahead_mask) for _ in range(depth)]
+        self.embed = nn.Embedding(vocab_size, embed_size)
+        self.decoder_layers = nn.Sequential(
+            *[DecoderLayer(max_length, embed_size, hidden_size, heads, dropout_prob) for _ in range(depth)]
         )
+        self.linear = nn.Linear(embed_size, vocab_size)
+        self.softmax = nn.Softmax()
 
-    def forward(self, H_x: torch.Tensor, Y_embed: torch.Tensor) -> torch.Tensor:
+    def forward(self, Y_ep: torch.Tensor, H_all_x: torch.Tensor, Mask: torch.Tensor) -> torch.Tensor:
         """
-        :param H_x: (N, L, H)
-        :param Y_embed: (N, L, H)
-        :return: H_y: (N, L, H)
+        :param Y_ep: (N, L, E)
+        :param H_all_x: (N, L, H)
+        :param M: (N, L)
+        :return: H_all_t: (N, L, H)
         """
-        _, H_y = self.layers((H_x, Y_embed))
-        return H_y
+        Y_ep = self.embed(Y_ep)
+        H_all_y = self.decoder_layers(Y_ep, H_all_x, Mask)
+        # out = self.linear(H_all_y) # (N, L, Y_vocab_size)
+        # pred = self.softmax(out) # (N, L, Y_vocab_size)
+        
+        return H_all_y
