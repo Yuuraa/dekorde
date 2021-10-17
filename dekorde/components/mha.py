@@ -2,6 +2,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
+import math
 
 
 class MultiHeadAttentionLayer(nn.Module):
@@ -51,5 +52,6 @@ class MultiHeadAttentionLayer(nn.Module):
         if self.masked: 
             assert ( Mask != None ), "Masked Multi head attention require mask as input"
             attn_scores = attn_scores.masked_fill(Mask == 0, -float('inf'))
-        V = torch.dot(attn_scores, V) # (B, L, E)
+        V = torch.bmm(attn_scores, V) # (B, L, E)
+        V = V / math.sqrt(V.shape[2]) # sclaed attention
         return V
