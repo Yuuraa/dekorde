@@ -21,7 +21,7 @@ class EncoderLayer(nn.Module):
         self.norm_2 = nn.LayerNorm((max_length, embed_size))
         self.dropout = nn.Dropout(dropout_prob)
 
-    def forward(self, H_x: torch.Tensor) -> torch.Tensor:
+    def forward(self, X_ep: torch.Tensor) -> torch.Tensor:
         """
         :param X_ep: (B, L, E)
         :return: H_all_x: (B, L, E)
@@ -39,7 +39,6 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, max_length: int, vocab_size: int, embed_size: int, hidden_size: int, heads:int, depth: int, dropout_prob: float = 0.1):
         super().__init__()
-        self.embed = nn.Embedding(vocab_size, self.embed_size)
         self.encoder_layers = nn.Sequential(
             *[EncoderLayer(max_length, embed_size, hidden_size, heads) for _ in range(depth)]
         )
@@ -49,5 +48,4 @@ class Encoder(nn.Module):
         :param X_ep: (B, L, E)
         :return: H_all_x: (B, L, E)
         """
-        X_ep = self.embed(X_ep)
         return self.encoder_layers(X_ep)
