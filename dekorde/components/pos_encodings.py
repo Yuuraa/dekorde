@@ -4,7 +4,7 @@ import torch.nn as nn
 
 # Regularization technique, dropout이 적용된 형태
 class PositionalEncoding(nn.Module):
-    def __init__(self, max_length, embed_size, droopout_prob):
+    def __init__(self, max_length, embed_size, dropout_prob):
         self.max_length = max_length
         self.embed_size = embed_size
         self.dropout = nn.Dropout(dropout_prob)
